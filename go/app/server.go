@@ -1,5 +1,6 @@
 package app
 import (
+	"context"
 	"encoding/json"
 	"database/sql"
 	"errors"
@@ -49,6 +50,7 @@ func (s Server) Run() int {
 	mux.HandleFunc("GET /items", h.GetItems)
 	mux.HandleFunc("GET /images/{filename}", h.GetImage)
 	mux.HandleFunc("GET /items/{id}", h.GetItemByID)
+	mux.HandleFunc("GET /search", h.SearchItems)
 
 	// start the server
 	slog.Info("http server started on", "port", s.Port)
@@ -311,4 +313,54 @@ func (s *Handlers) buildImagePath(imageFileName string) (string, error) {
 
 	return imgPath, nil
 }
+
+// Search retrieves items that contain the keyword in their name or category.
+func (r *itemRepository) Search(ctx context.Context, keyword string) ([]Item, error) {
+	query := `SELECT id, name, category, image_name FROM items WHERE name LIKE ? OR category LIKE ?`
+	likeKeyword := "%" + keyword + "%"
+	rows, err := r.db.QueryContext(ctx, query, likeKeyword, likeKeyword)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search items: %w", err)
+	}
+	defer rows.Close()
+
+	var items []Item
+	for rows.Next() {
+		var item Item
+		if err := rows.Scan(&item.ID, &item.Name, &item.Category, &item.ImageName); err != nil {
+			return nil, fmt.Errorf("failed to scan item: %w", err)
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+// SearchItems is a handler to search items by keyword for GET /search .
+func (h *Handlers) SearchItems(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// クエリパラメータからキーワードを取得
+	keyword := r.URL.Query().Get("keyword")
+	if keyword == "" {
+		http.Error(w, "keyword is required", http.StatusBadRequest)
+		return
+	}
+
+	// アイテムを検索
+	items, err := h.itemRepo.Search(ctx, keyword)
+	if err != nil {
+		slog.Error("failed to search items: ", "error", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// レスポンスを返す
+	response := map[string][]Item{"items": items}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
 
