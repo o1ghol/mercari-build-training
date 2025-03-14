@@ -1,6 +1,6 @@
 package app
 import (
-	"context"
+	//"context"
 	"encoding/json"
 	"database/sql"
 	"errors"
@@ -134,7 +134,20 @@ func (s *Handlers) AddItem(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
 	// STEP 4-4: uncomment on adding an implementation to store an image
+	category, err := s.itemRepo.GetCategoryByName(ctx, req.Category)
+	if err != nil {
+		// カテゴリが存在しない場合、新しく追加
+		slog.Warn("Category not found, creating new category", "category", req.Category)
+		category, err = s.itemRepo.InsertCategory(ctx, req.Category)
+		if err != nil {
+			slog.Error("Failed to create category", "category", req.Category, "error", err)
+			http.Error(w, "Failed to create category", http.StatusInternalServerError)
+			return
+		}
+	}
+
 	fileName, err := s.storeImage(req.Image)
 	 if err != nil {
 	 	slog.Error("failed to store image: ", "error", err)
@@ -142,14 +155,13 @@ func (s *Handlers) AddItem(w http.ResponseWriter, r *http.Request) {
 	 	return
 	 }
 	item := &Item{
-		Name: req.Name,
-		// STEP 4-2: add a category field
-		Category: req.Category,
-		// STEP 4-4: add an image field
-		ImageName: fileName,
+		Name:       req.Name,
+		CategoryID: category.ID, // 取得または作成したカテゴリIDを使用
+		ImageName:  fileName,
 	}
 	message := fmt.Sprintf("item received: %s", item.Name)
 	slog.Info(message)
+
 	// STEP 4-2: add an implementation to store an item
 	err = s.itemRepo.Insert(ctx, item)
 	if err != nil {
@@ -314,27 +326,6 @@ func (s *Handlers) buildImagePath(imageFileName string) (string, error) {
 	return imgPath, nil
 }
 
-// Search retrieves items that contain the keyword in their name or category.
-func (r *itemRepository) Search(ctx context.Context, keyword string) ([]Item, error) {
-	query := `SELECT id, name, category, image_name FROM items WHERE name LIKE ? OR category LIKE ?`
-	likeKeyword := "%" + keyword + "%"
-	rows, err := r.db.QueryContext(ctx, query, likeKeyword, likeKeyword)
-	if err != nil {
-		return nil, fmt.Errorf("failed to search items: %w", err)
-	}
-	defer rows.Close()
-
-	var items []Item
-	for rows.Next() {
-		var item Item
-		if err := rows.Scan(&item.ID, &item.Name, &item.Category, &item.ImageName); err != nil {
-			return nil, fmt.Errorf("failed to scan item: %w", err)
-		}
-		items = append(items, item)
-	}
-	return items, nil
-}
-
 // SearchItems is a handler to search items by keyword for GET /search .
 func (h *Handlers) SearchItems(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -362,5 +353,23 @@ func (h *Handlers) SearchItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 }
+// GetCategories ハンドラー: カテゴリー一覧を取得
+func (s *Handlers) GetCategories(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 
+	categories, err := s.itemRepo.GetCategories(ctx)
+	if err != nil {
+		slog.Error("failed to retrieve categories: ", "error", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string][]Category{"categories": categories}
+	w.Header().Set("Content-Type", "application/json")
+	err = json.NewEncoder(w).Encode(response)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
 
